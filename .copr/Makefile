@@ -50,6 +50,7 @@ srpm:
 		iml-api.service \
 		iml-rust-stats.service \
 		iml-device.service \
+		iml-task-runner.service \
 		iml-action-runner.service \
 		iml-action-runner.socket \
 		iml-agent/systemd-units/* \
