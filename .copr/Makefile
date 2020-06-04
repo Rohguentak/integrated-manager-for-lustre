@@ -42,7 +42,7 @@ srpm:
 	mkdir -p ${TMPDIR}/_topdir/{SOURCES,SPECS}
 	mkdir -p ${TMPDIR}/release/rust-iml
 	PQ_LIB_DIR=/usr/pgsql-9.6/lib cargo build --release
-	cp ${TARGET}/release/iml-{action-runner,agent,agent-comms,agent-daemon,api,mailbox,ntp,ostpool,postoffice,sfa,stats,device,warp-drive} \
+	cp ${TARGET}/release/iml-{action-runner,agent,agent-comms,agent-daemon,api,device,mailbox,ntp,ostpool,postoffice,sfa,stats,task-runner,warp-drive} \
 		iml-agent-comms.service \
 		iml-mailbox.service \
 		iml-postoffice.service \
@@ -127,7 +127,7 @@ iml-gui-srpm:
 	yarn install; \
 	yarn build:release
 	tar cvf ${TMPDIR}/_topdir/SOURCES/iml-gui.tar -C ./iml-gui dist
-	
+
 	cp iml-gui/rust-iml-gui.spec ${TMPDIR}/_topdir/SPECS/
 	rpmbuild -bs -D "_topdir ${TMPDIR}/_topdir" ${TMPDIR}/_topdir/SPECS/rust-iml-gui.spec
 
