@@ -292,5 +292,9 @@ pub fn get_db_conn_string() -> String {
         xs.push(format!("password={}", x));
     }
 
+    if let Some(x) = std::env::current_exe().unwrap_or("".into()).file_name() {
+        xs.push(format!("application_name={:?}", x));
+    }
+
     xs.join(" ")
 }
