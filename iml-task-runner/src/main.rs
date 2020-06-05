@@ -127,10 +127,15 @@ async fn send_work(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     iml_tracing::init();
 
-    let (db_client, _conn) = iml_postgres::connect().await?;
+    let (db_client, conn) = iml_postgres::connect().await?;
     let shared_client = iml_postgres::shared_client(db_client);
     let pool = iml_orm::pool()?;
     let activeclients = Arc::new(Mutex::new(HashSet::new()));
+
+    tokio::spawn(async move {
+        conn.await
+            .unwrap_or_else(|e| tracing::error!("DB connection error {}", e));
+    });
 
     // Task Runner Loop
     let mut interval = time::interval(Duration::from_secs(DELAY));
@@ -162,11 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             send_work(shared_client.clone(), fqdn, fsname, &task)
                                 .await
                                 .map_err(|e| {
-                                    tracing::warn!(
-                                        "send_work({}) failed {:?}",
-                                        task.name,
-                                        e
-                                    );
+                                    tracing::warn!("send_work({}) failed {:?}", task.name, e);
                                     e
                                 })
                         }
