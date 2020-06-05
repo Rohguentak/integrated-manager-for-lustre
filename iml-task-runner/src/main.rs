@@ -79,6 +79,8 @@ async fn send_work(
     let trans = c.transaction().await?;
     let sql = "DELETE FROM chroma_core_fidtaskqueue WHERE id in ( SELECT id FROM chroma_core_fidtaskqueue WHERE task_id = $1 LIMIT $2 SKIP LOCKED ) RETURNING *";
     let s = trans.prepare(sql).await?;
+
+    // @@ could convert this to query_raw and map stream then collect
     let rowlist = trans.query(&s, &[&task.id, &FID_LIMIT]).await?;
 
     tracing::debug!(
@@ -130,50 +132,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = iml_orm::pool()?;
     let activeclients = Arc::new(Mutex::new(HashSet::new()));
 
-    // Task Runner Loop
-    let mut interval = time::interval(Duration::from_secs(DELAY));
-    loop {
-        interval.tick().await;
+    // Single runner
+    let fut = async move  {
+        let workers = available_workers(&pool, activeclients.clone()).await?;
+        let worker = workers.first().unwrap();
+        let fqdn = worker_fqdn(&pool, &worker).await?;
+        let tasks = tasks_per_worker(&pool, &worker).await?;
+        let task = tasks.first().unwrap();
 
-        let workers = available_workers(&pool, activeclients.clone())
+        send_work(shared_client.clone(), fqdn, worker.filesystem.clone(), &task)
             .await
-            .unwrap_or(vec![]);
+            .map_err(|e| {
+                tracing::warn!(
+                    "send_work({}) failed {:?}",
+                    task.name,
+                    e
+                );
+                e
+            })
+    };
+            
+    tokio::spawn(fut);
 
-        tokio::spawn({
-            let shared_client = shared_client.clone();
-            try_join_all(workers.into_iter().map(|worker| {
-                let shared_client = shared_client.clone();
-                let fsname = worker.filesystem.clone();
-                let pool = pool.clone();
-                let activeclients = activeclients.clone();
+    Ok(())
+    // // Task Runner Loop
+    // let mut interval = time::interval(Duration::from_secs(DELAY));
+    // loop {
+    //     interval.tick().await;
 
-                async move {
-                    activeclients.lock().await.insert(worker.id);
-                    let tasks = tasks_per_worker(&pool, &worker).await?;
-                    let fqdn = worker_fqdn(&pool, &worker).await?;
+    //     let workers = available_workers(&pool, activeclients.clone())
+    //         .await
+    //         .unwrap_or(vec![]);
 
-                    let rc = try_join_all(tasks.into_iter().map(|task| {
-                        let shared_client = shared_client.clone();
-                        let fsname = fsname.clone();
-                        let fqdn = fqdn.clone();
-                        async move {
-                            send_work(shared_client.clone(), fqdn, fsname, &task)
-                                .await
-                                .map_err(|e| {
-                                    tracing::warn!(
-                                        "send_work({}) failed {:?}",
-                                        task.name,
-                                        e
-                                    );
-                                    e
-                                })
-                        }
-                    }))
-                    .await;
-                    activeclients.lock().await.remove(&worker.id);
-                    rc
-                }
-            }))
-        });
-    }
+    //     tokio::spawn({
+    //         let shared_client = shared_client.clone();
+    //         try_join_all(workers.into_iter().map(|worker| {
+    //             let shared_client = shared_client.clone();
+    //             let fsname = worker.filesystem.clone();
+    //             let pool = pool.clone();
+    //             let activeclients = activeclients.clone();
+
+    //             async move {
+    //                 activeclients.lock().await.insert(worker.id);
+    //                 let tasks = tasks_per_worker(&pool, &worker).await?;
+    //                 let fqdn = worker_fqdn(&pool, &worker).await?;
+
+    //                 let rc = try_join_all(tasks.into_iter().map(|task| {
+    //                     let shared_client = shared_client.clone();
+    //                     let fsname = fsname.clone();
+    //                     let fqdn = fqdn.clone();
+    //                     async move {
+    //                         send_work(shared_client.clone(), fqdn, fsname, &task)
+    //                             .await
+    //                             .map_err(|e| {
+    //                                 tracing::warn!(
+    //                                     "send_work({}) failed {:?}",
+    //                                     task.name,
+    //                                     e
+    //                                 );
+    //                                 e
+    //                             })
+    //                     }
+    //                 }))
+    //                 .await;
+    //                 activeclients.lock().await.remove(&worker.id);
+    //                 rc
+    //             }
+    //         }))
+    //     });
+    // }
 }
