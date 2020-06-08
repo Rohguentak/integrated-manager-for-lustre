@@ -24,7 +24,7 @@ use tokio::time;
 pub mod error;
 
 // Number of fids to chunk together
-const FID_LIMIT: u32 = 2000;
+const FID_LIMIT: i64 = 2000;
 // Number of seconds between cycles
 const DELAY: u64 = 5;
 
@@ -77,7 +77,7 @@ async fn send_work(
 
     let mut c = shared_client.lock().await;
     let trans = c.transaction().await?;
-    let sql = "DELETE FROM chroma_core_fidtaskqueue WHERE id in ( SELECT id FROM chroma_core_fidtaskqueue WHERE task_id = $1 LIMIT $2 SKIP LOCKED ) RETURNING *";
+    let sql = "DELETE FROM chroma_core_fidtaskqueue WHERE id in ( SELECT id FROM chroma_core_fidtaskqueue WHERE task_id = $1 LIMIT $2 FOR UPDATE SKIP LOCKED ) RETURNING *";
     let s = trans.prepare(sql).await?;
 
     // @@ could convert this to query_raw and map stream then collect

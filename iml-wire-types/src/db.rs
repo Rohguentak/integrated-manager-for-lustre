@@ -118,7 +118,7 @@ impl From<Row> for FidTaskQueue {
         FidTaskQueue {
             id: row.get::<_, i32>("id"),
             fid: row.get("fid"),
-            data: serde_json::from_str(row.get::<_, &str>("data")).unwrap(),
+            data: row.get("data"),
             task_id: row.get::<_, i32>("task_id"),
         }
     }
