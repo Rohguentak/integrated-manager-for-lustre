@@ -44,9 +44,9 @@ impl ClientWrapper {
 
 fn client() -> ClientWrapper {
     if running_in_docker() {
-        ClientWrapper::Unix(Client::unix())
-    } else {
         ClientWrapper::Http(Client::new())
+    } else {
+        ClientWrapper::Unix(Client::unix())
     }
 }
 
