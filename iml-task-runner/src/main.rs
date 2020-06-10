@@ -13,7 +13,7 @@ use iml_orm::{
     DbPool,
 };
 use iml_postgres::SharedClient;
-use iml_wire_types::{db::FidTaskQueue, AgentResult, FidItem, TaskAction};
+use iml_wire_types::{db::FidTaskQueue, AgentResult, FidError, FidItem, TaskAction};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -78,6 +78,7 @@ async fn send_work(
 
     let mut c = shared_client.lock().await;
     let trans = c.transaction().await?;
+
     let sql = "DELETE FROM chroma_core_fidtaskqueue WHERE id in ( SELECT id FROM chroma_core_fidtaskqueue WHERE task_id = $1 LIMIT $2 FOR UPDATE SKIP LOCKED ) RETURNING *";
     let s = trans.prepare(sql).await?;
 
@@ -133,7 +134,28 @@ async fn send_work(
             Ok(res) => {
                 let agent_result: AgentResult = serde_json::from_value(res)?;
                 match agent_result {
-                    Ok(data) => tracing::debug!("Success {} on {}: {:?}", &action, &fqdn, data),
+                    Ok(data) => {
+                        tracing::debug!("Success {} on {}: {:?}", &action, &fqdn, data);
+                        if task.keep_failed {
+                            let errors: Vec<FidError> = serde_json::from_value(data)?;
+                            let sql = "INSERT INTO chroma_core_fidtaskerror (fid, task, data, errno) VALUES ($1, $2, $3, $4)";
+                            let s = trans.prepare(sql).await?;
+                            let task_id = task.id;
+                            for err in errors.iter() {
+                                if let Err(e) = trans
+                                    .execute(&s, &[&err.fid, &task_id, &err.data, &err.errno])
+                                    .await
+                                {
+                                    tracing::info!(
+                                        "Failed to insert fid error ({} : {}): {}",
+                                        err.fid,
+                                        err.errno,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
                     Err(err) => {
                         tracing::info!("Failed {} on {}: {}", &action, &fqdn, err);
                         return trans.rollback().err_into().await;
@@ -188,6 +210,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let fsname = fsname.clone();
                         let fqdn = fqdn.clone();
                         async move {
+                            // @@ send_work() locks shared_client -
+                            // need a way to run multiple transactions
+                            // simultaneously
                             send_work(shared_client.clone(), fqdn, fsname, &task, host_id)
                                 .await
                                 .map_err(|e| {
