@@ -8,7 +8,7 @@ use iml_orm::{
     clientmount::ChromaCoreLustreclientmount as Client,
     filesystem::ChromaCoreManagedfilesystem as Filesystem,
     hosts::ChromaCoreManagedhost as Host,
-    task::ChromaCoreTask as Task,
+    task::{self, ChromaCoreTask as Task},
     tokio_diesel::{AsyncRunQueryDsl as _, OptionalExtension as _},
     DbPool,
 };
@@ -66,6 +66,7 @@ async fn worker_fqdn(pool: &DbPool, worker: &Client) -> Result<String, error::Im
 }
 
 async fn send_work(
+    orm_pool: DbPool,
     mut client: pool::Client,
     fqdn: String,
     fsname: String,
@@ -96,7 +97,7 @@ async fn send_work(
         return trans.commit().err_into().await;
     }
 
-    let fidlist = rowlist
+    let fidlist: Vec<FidItem> = rowlist
         .into_iter()
         .map(|row| {
             let ft: FidTaskQueue = row.into();
@@ -120,6 +121,8 @@ async fn send_work(
         trans.execute(&s, &[&host_id, &task.id]).await?;
     }
 
+    let mut completed = fidlist.len();
+    let mut failed = 0;
     let args = TaskAction(fsname, taskargs, fidlist);
 
     // send fids to actions runner
@@ -136,8 +139,11 @@ async fn send_work(
                     Ok(data) => {
                         tracing::debug!("Success {} on {}: {:?}", &action, &fqdn, data);
                         // @@ update task.{fids_completed | fids_failed | data_transfered }?
+                        let errors: Vec<FidError> = serde_json::from_value(data)?;
+                        failed += errors.len();
+                        completed -= errors.len();
+
                         if task.keep_failed {
-                            let errors: Vec<FidError> = serde_json::from_value(data)?;
                             let sql = "INSERT INTO chroma_core_fidtaskerror (fid, task, data, errno) VALUES ($1, $2, $3, $4)";
                             let s = trans.prepare(sql).await?;
                             let task_id = task.id;
@@ -165,7 +171,15 @@ async fn send_work(
         }
     }
 
-    trans.commit().err_into().await
+    trans.commit().await?;
+
+    if completed > 0 || failed > 0 {
+        task::increase_finished(task.id, completed as i64, failed as i64)
+            .execute_async(&orm_pool)
+            .await?;
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -184,7 +198,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let workers = available_workers(&orm_pool, activeclients.clone())
             .await
             .unwrap_or(vec![]);
-        activeclients.lock().await.extend(workers.iter().map(|w| w.id));
+        activeclients
+            .lock()
+            .await
+            .extend(workers.iter().map(|w| w.id));
 
         tokio::spawn({
             let pg_pool = pg_pool.clone();
@@ -201,10 +218,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let rc = try_join_all(tasks.into_iter().map(|task| {
                         let pg_pool = pg_pool.clone();
+                        let orm_pool = orm_pool.clone();
                         let fsname = fsname.clone();
                         let fqdn = fqdn.clone();
                         async move {
-                            send_work(pg_pool.get().await?, fqdn, fsname, &task, host_id)
+                            send_work(orm_pool, pg_pool.get().await?, fqdn, fsname, &task, host_id)
                                 .await
                                 .map_err(|e| {
                                     tracing::warn!("send_work({}) failed {:?}", task.name, e);
