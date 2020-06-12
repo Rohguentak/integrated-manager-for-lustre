@@ -126,7 +126,8 @@ async fn send_work(
     let args = TaskAction(fsname, taskargs, fidlist);
 
     // send fids to actions runner
-    for action in task.actions.iter() {
+    // action names on Agents are "action.ACTION_NAME"
+    for action in task.actions.iter().map(|a| format!("action.{}", a)) {
         let (_, fut) = invoke_rust_agent(&fqdn, action, &args);
         match fut.await {
             Err(e) => {
@@ -138,7 +139,6 @@ async fn send_work(
                 match agent_result {
                     Ok(data) => {
                         tracing::debug!("Success {} on {}: {:?}", &action, &fqdn, data);
-                        // @@ update task.{fids_completed | fids_failed | data_transfered }?
                         let errors: Vec<FidError> = serde_json::from_value(data)?;
                         failed += errors.len();
                         completed -= errors.len();
