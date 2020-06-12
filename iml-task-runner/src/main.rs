@@ -128,7 +128,7 @@ async fn send_work(
     // send fids to actions runner
     // action names on Agents are "action.ACTION_NAME"
     for action in task.actions.iter().map(|a| format!("action.{}", a)) {
-        let (_, fut) = invoke_rust_agent(&fqdn, action, &args);
+        let (_, fut) = invoke_rust_agent(&fqdn, &action, &args);
         match fut.await {
             Err(e) => {
                 tracing::info!("Failed to send {} to {}: {}", &action, &fqdn, e);
